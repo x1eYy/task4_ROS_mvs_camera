@@ -11,16 +11,12 @@ CameraNode::CameraNode(std::unique_ptr<CameraBackend> backend, const rclcpp::Nod
 : rclcpp::Node("hikrobot_mvs_camera", options), backend_(std::move(backend)) {
   if (!backend_) throw std::invalid_argument("camera backend is required");
   selector_.serial_number = declare_parameter<std::string>("serial_number", "");
-  selector_.camera_ip = declare_parameter<std::string>("camera_ip", "");
   frame_id_ = declare_parameter<std::string>("frame_id", "camera_optical_frame");
   const auto image_topic = declare_parameter<std::string>("image_topic", "/image_raw");
   settings_.exposure = declare_parameter<double>("exposure_time_us", -1.0);
   settings_.gain = declare_parameter<double>("gain_db", -1.0);
   settings_.frame_rate = declare_parameter<double>("frame_rate_hz", -1.0);
   settings_.pixel_format = declare_parameter<std::string>("pixel_format", "");
-  if (!selector_.serial_number.empty() && !selector_.camera_ip.empty()) {
-    throw std::invalid_argument("set either serial_number or camera_ip, not both");
-  }
   if (image_topic.empty() || frame_id_.empty()) {
     throw std::invalid_argument("image_topic and frame_id must not be empty");
   }
@@ -65,7 +61,7 @@ rcl_interfaces::msg::SetParametersResult CameraNode::on_parameters(
   unsigned int camera_updates = 0;
   for (const auto& param : params) {
     const auto& name = param.get_name();
-    if (name == "serial_number" || name == "camera_ip" || name == "image_topic" ||
+    if (name == "serial_number" || name == "image_topic" ||
         name == "frame_id") {
       response.successful = false;
       response.reason = name + " is fixed after startup";

@@ -1,116 +1,71 @@
-# Hikrobot MVS ROS 2 camera
+# 海康 MV-CA016-10UC 相机 ROS 2 功能包
 
-ROS 2 Humble C++ wrapper for one Hikrobot industrial camera. The eventual target is one
-specific CS016 or CA016 variant; its full suffix and hardware capabilities have not yet
-been supplied. The current code discovers GigE and USB3 Vision devices through
-the MVS SDK and deliberately does not assume a resolution, frame rate, or color mode.
+本仓库将海康机器人 **MV-CA016-10UC（USB3 彩色面阵相机）** 的 MVS C SDK 封装为 ROS 2 Humble 节点。节点按序列号发现相机，发布标准 `sensor_msgs/msg/Image`，支持曝光、增益、帧率、像素格式的动态设置，并在断线后自动连接原设备、恢复已接受的配置。
 
-## Requirements and build
+本机已使用一台 MV-CA016-10UC 实测。逐项结果见 [验收记录](docs/acceptance.md)。请勿将 MVS 厂商库或现场图像提交到 Git 仓库。
 
-- Ubuntu 22.04, ROS 2 Humble, `colcon`, and ROS dependencies from `package.xml`.
-- Hikrobot MVS **Linux x86_64 C SDK**, installed separately. This machine has MVS under
-  `/opt/MVS`, with `/opt/MVS/include/MvCameraControl.h` and
-  `/opt/MVS/lib/64/libMvCameraControl.so`. The observed library file is version 4.8.2.1.
-  MVS is a vendor SDK and is **not** installed by `rosdep`.
+## 环境与编译
 
-From this repository root:
+- Ubuntu 22.04 x86_64、ROS 2 Humble、`colcon`。
+- 海康 MVS Linux x86_64 SDK。从[海康机器人官方下载中心](https://www.hikrobotics.com/en/machinevision/service/download/)选择 MVS 的 Linux x86_64 安装包，按厂商包内安装说明安装；安装后确认头文件和主库存在。本机安装于 `/opt/MVS`，头文件为 `include/MvCameraControl.h`，主库为 `lib/64/libMvCameraControl.so`，实测主库文件版本 4.8.2.1。其他 SDK 版本需自行回归测试。MVS **不能由 rosdep 安装**。
+- ROS 依赖均写在 `package.xml`，可由 rosdep 检查或安装。
+
+在仓库根目录运行：
 
 ```bash
-source /opt/ros/humble/setup.bash   # use setup.zsh in zsh
+source /opt/ros/humble/setup.bash            # zsh 改用 setup.zsh
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --packages-select hikrobot_mvs_camera --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install/setup.bash           # use setup.zsh in zsh
+source install/setup.bash                     # zsh 改用 setup.zsh
 ```
 
-For a non-default MVS location, pass `-DMVS_ROOT=/absolute/path/to/MVS` in the CMake
-arguments. If the executable cannot load an MVS library, add its 64-bit library directory
-to the system loader configuration or `LD_LIBRARY_PATH`. Do not copy the vendor library
-into this Git repository. The executable's installed RPATH points to the configured SDK
-library directory on the build machine.
+SDK 不在默认目录时，编译命令增加 `-DMVS_ROOT=/绝对路径/MVS`，启动时增加 `mvs_lib_dir:=/绝对路径/MVS/lib/64`。launch 会把该目录加入相机进程的 `LD_LIBRARY_PATH`，供 MVS 在运行时加载像素转换库。直接使用 `ros2 run ... camera_node` 时，需先手动设置同一环境变量。
 
-## Run and inspect
+## 连接与运行
 
-Connect exactly one camera, or provide a selector. `camera_ip` is for GigE only; a serial
-number works for both interfaces. Simultaneously setting both selectors is an error.
-An empty selector is accepted only if exactly one GigE/USB3 camera is discovered.
+相机应接在 **USB3 端口**，用 `lsusb -t` 确认链路为 `5000M`。接在 USB2（`480M`）时仍可取图，但本次实测帧率降至约 11.7 fps。关闭 MVS 桌面软件后再启动节点，避免相机独占访问冲突。
 
 ```bash
-ros2 launch hikrobot_mvs_camera camera.launch.py serial_number:=YOUR_SERIAL
-# or for GigE:
-ros2 launch hikrobot_mvs_camera camera.launch.py camera_ip:=192.168.1.10
+ros2 run hikrobot_mvs_camera camera_probe       # 列出型号、序列号、分辨率和参数范围
+ros2 launch hikrobot_mvs_camera camera.launch.py serial_number:=你的序列号
 ros2 topic hz /image_raw
 ros2 topic echo /hikrobot_mvs_camera/actual_fps
-rviz2
+rviz2 -d install/hikrobot_mvs_camera/share/hikrobot_mvs_camera/config/camera.rviz
 ```
 
-In RViz2, add **Image** and choose `/image_raw`. The node publishes `mono8` for supported
-monochrome formats and `bgr8` for supported Bayer/RGB formats. The timestamp is the ROS
-host time when a frame is received; it is not a synchronized camera hardware timestamp.
-Actual published FPS is measured over five-second windows, separately from the configured
-camera frame rate. `frame_lost_packets` is logged from per-frame SDK metadata.
+只有一台 MV-CA016-10UC 可见时可不填 `serial_number`；多台同型号相机同时可见时必须指定。重连始终匹配原序列号。图像默认发布到 `/image_raw`，使用传感器数据 QoS；`actual_fps` 每约 5 秒发布一次。图像时间戳为主机收到该帧时的 ROS 时间，并非已同步的相机硬件时间。
 
-Launch arguments and node parameters:
-
-| Name | Default | Meaning |
+| launch 参数 / ROS 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `serial_number` | empty | Exact device serial number |
-| `camera_ip` | empty | Exact current GigE IPv4 address |
-| `image_topic` | `/image_raw` | Published image topic |
-| `frame_id` | `camera_optical_frame` | Image header frame ID |
-| `exposure_time_us` | `-1.0` | Exposure in microseconds; `-1` keeps device setting at startup |
-| `gain_db` | `-1.0` | Gain in dB; `-1` keeps device setting at startup |
-| `frame_rate_hz` | `-1.0` | Requested camera frame rate; `-1` keeps device setting at startup |
-| `pixel_format` | empty | MVS symbolic format, e.g. `Mono8`; empty keeps device setting |
+| `serial_number` | 空 | 相机序列号，启动后不可修改 |
+| `image_topic` | `/image_raw` | 图像话题，启动后不可修改 |
+| `frame_id` | `camera_optical_frame` | 图像坐标系标识，启动后不可修改 |
+| `exposure_time_us` | `-1.0` | 曝光时间，微秒；-1 表示启动时保留相机当前值 |
+| `gain_db` | `-1.0` | 增益，dB；-1 表示启动时保留相机当前值，0 dB 有效 |
+| `frame_rate_hz` | `-1.0` | 相机设置帧率；-1 表示启动时保留相机当前值 |
+| `pixel_format` | 空 | MVS 像素格式符号；空表示启动时保留相机当前值 |
+| `mvs_lib_dir` | `/opt/MVS/lib/64` | 仅供 launch 设置 SDK 运行时库路径 |
 
-The four camera settings can be changed while connected, one setting per request:
+动态设置示例，每次设置一项：
 
 ```bash
 ros2 param set /hikrobot_mvs_camera exposure_time_us 5000.0
 ros2 param set /hikrobot_mvs_camera gain_db 2.0
 ros2 param set /hikrobot_mvs_camera frame_rate_hz 30.0
-ros2 param set /hikrobot_mvs_camera pixel_format Mono8
-ros2 param get /hikrobot_mvs_camera exposure_time_us
+ros2 param set /hikrobot_mvs_camera pixel_format BayerRG8
+ros2 param get /hikrobot_mvs_camera pixel_format
 ```
 
-The SDK's supported range and format list govern accepted values. Manual exposure/gain
-disables the corresponding auto mode, and frame-rate setting enables frame-rate control.
-The node checks the SDK result and reads numeric values back; values beyond range or
-unavailable on the camera are rejected with a reason. Supported pixel formats are limited
-to Mono8/10/12/14/16, Bayer8/10/12/16, RGB8, and BGR8 variants that this conversion
-path handles. Format changes stop and restart grabbing when necessary. Settings accepted
-by the node are reapplied after reconnection. Parameter updates while disconnected are
-rejected; startup values are retried on every successful connection.
+节点先查询设备支持范围与格式，检查 SDK 返回值并读回确认；不支持或越界的值会被拒绝并给出原因。手动曝光/增益会关闭对应自动模式，设置帧率会启用帧率控制。像素格式切换会暂停并恢复采集。断线期间不接受新的动态参数；重新连接后恢复此前成功设置的参数。设置帧率与实际采集帧率是两个不同指标，例如曝光 50 ms 时，即使请求 30 Hz，实际帧率也可能约为 20 fps。
 
-## Hardware arrival checklist (not yet performed)
+设备支持 11 种像素格式，均已实测能发布 ROS 图像：`Mono8`、`Mono10`、`Mono12`、`RGB8Packed`、`YUV422_YUYV_Packed`、`YUV422Packed`、`BayerRG8`、`BayerRG10`、`BayerRG10Packed`、`BayerRG12`、`BayerRG12Packed`。单色格式统一发布 `mono8`，彩色格式转换为 `bgr8`。相机报告的参数范围随固件与工作模式变化，以 `camera_probe` 的实时查询为准。
 
-1. Record the **complete** model suffix, serial number, interface, and firmware version.
-   Retain only that model's setup and acceptance instructions after identification.
-2. Verify camera discovery and image acquisition in the vendor MVS application first.
-   For GigE, check power, cable, NIC link, and that camera/NIC addresses share a subnet.
-   For USB3, check the port, cable, and device permissions. Close the MVS application
-   before starting this node because the node opens the camera exclusively.
-3. Query the selected camera's default resolution, pixel formats, exposure/gain/frame-rate
-   ranges, and rated maximum FPS. Record these in this README and set one model-specific
-   launch default. Remove the unused interface's setup notes at that point.
-4. Start the launch file with a serial number or GigE IP. Confirm `ros2 topic hz`,
-   `/hikrobot_mvs_camera/actual_fps`, and the RViz2 Image display. Compare requested
-   and actual FPS at the default resolution; for GigE inspect packet loss and tune the
-   NIC and packet size if needed.
-5. Set each of the four camera parameters; check SDK readback and visible image effects.
-   Verify an out-of-range value fails with a clear reason. Unplug and reconnect the
-   camera, then confirm the same Topic resumes and accepted settings are restored.
-6. Re-run the build and tests; add one acceptance record containing commands, SDK and
-   firmware versions, measured FPS, observed losses, and pass/fail results for **only
-   the selected model**.
-
-## Software tests
+## 测试与排障
 
 ```bash
 colcon test --packages-select hikrobot_mvs_camera
 colcon test-result --verbose
+rosdep check --from-paths src --ignore-src
 ```
 
-The fake-device tests cover unique device selection, a valid `sensor_msgs/Image`, dynamic
-parameter acceptance/rejection, and parameter restoration after a simulated disconnect.
-They cannot establish real camera performance, SDK format support, or physical reconnect
-behavior. Those remain hardware acceptance items above.
+假设备测试覆盖设备唯一选择、图像消息、动态参数拒绝及断线后配置恢复；实机结果见验收记录。若相机未被发现，检查 USB 供电、线缆、权限和 MVS 软件是否占用设备。若图像帧率偏低，先用 `lsusb -t` 排除 USB2 链路，再分别检查曝光时间、设置帧率与 `actual_fps`。若直接运行节点出现 `MV_CC_ConvertPixelTypeEx` 的动态库加载错误，使用上述 launch 或设置 `LD_LIBRARY_PATH`。

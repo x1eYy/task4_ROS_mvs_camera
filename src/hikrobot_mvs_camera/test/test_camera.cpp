@@ -88,19 +88,17 @@ protected:
 
 TEST(Selection, RequiresExactlyOneMatch) {
   const std::vector<Device> devices = {
-    {"G1", "192.168.1.10", "CS016", true},
-    {"U1", "", "CA016", false},
+    {"U1", "MV-CA016-10UC"},
+    {"U2", "MV-CA016-10UC"},
+    {"X1", "OTHER"},
   };
   std::size_t index = 99;
   std::string error;
   EXPECT_FALSE(hikrobot_mvs_camera::select_device(devices, {}, index, error));
   EXPECT_NE(error.find("multiple"), std::string::npos);
-  EXPECT_TRUE(hikrobot_mvs_camera::select_device(devices, {"U1", ""}, index, error));
-  EXPECT_EQ(index, 1u);
-  EXPECT_TRUE(hikrobot_mvs_camera::select_device(devices, {"", "192.168.1.10"}, index, error));
+  EXPECT_TRUE(hikrobot_mvs_camera::select_device(devices, {"U1"}, index, error));
   EXPECT_EQ(index, 0u);
-  EXPECT_FALSE(hikrobot_mvs_camera::select_device(devices, {"", "192.168.1.11"}, index, error));
-  EXPECT_FALSE(hikrobot_mvs_camera::select_device(devices, {"G1", "192.168.1.10"}, index, error));
+  EXPECT_FALSE(hikrobot_mvs_camera::select_device(devices, {"MISSING"}, index, error));
 }
 
 TEST_F(RosTest, PublishesFrameAndRestoresAcceptedSettingAfterReconnect) {

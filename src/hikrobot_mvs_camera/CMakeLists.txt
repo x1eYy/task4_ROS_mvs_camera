@@ -32,10 +32,16 @@ add_executable(camera_node src/main.cpp)
 target_link_libraries(camera_node ${PROJECT_NAME}_core)
 ament_target_dependencies(camera_node rclcpp)
 
-install(TARGETS ${PROJECT_NAME}_core camera_node
+add_executable(camera_probe src/camera_probe.cpp)
+target_include_directories(camera_probe PRIVATE "${MVS_INCLUDE_DIR}")
+target_link_libraries(camera_probe "${MVS_LIBRARY}")
+set_target_properties(camera_probe PROPERTIES BUILD_RPATH "${MVS_ROOT}/lib/64" INSTALL_RPATH "${MVS_ROOT}/lib/64")
+
+install(TARGETS ${PROJECT_NAME}_core camera_node camera_probe
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)

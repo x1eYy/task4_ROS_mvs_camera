@@ -3,7 +3,6 @@
 #include <MvCameraControl.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -26,26 +25,11 @@ std::string bounded_string(const unsigned char* value, std::size_t capacity) {
                      end ? static_cast<std::size_t>(end - value) : capacity);
 }
 
-std::string ip_string(uint32_t ip) {
-  std::ostringstream out;
-  out << ((ip >> 24) & 255) << '.' << ((ip >> 16) & 255) << '.'
-      << ((ip >> 8) & 255) << '.' << (ip & 255);
-  return out.str();
-}
-
 Device describe(const MV_CC_DEVICE_INFO& raw) {
   Device device;
-  device.gige = raw.nTLayerType == MV_GIGE_DEVICE;
-  if (device.gige) {
-    const auto& info = raw.SpecialInfo.stGigEInfo;
-    device.serial_number = bounded_string(info.chSerialNumber, sizeof(info.chSerialNumber));
-    device.model = bounded_string(info.chModelName, sizeof(info.chModelName));
-    device.camera_ip = ip_string(info.nCurrentIp);
-  } else {
-    const auto& info = raw.SpecialInfo.stUsb3VInfo;
-    device.serial_number = bounded_string(info.chSerialNumber, sizeof(info.chSerialNumber));
-    device.model = bounded_string(info.chModelName, sizeof(info.chModelName));
-  }
+  const auto& info = raw.SpecialInfo.stUsb3VInfo;
+  device.serial_number = bounded_string(info.chSerialNumber, sizeof(info.chSerialNumber));
+  device.model = bounded_string(info.chModelName, sizeof(info.chModelName));
   return device;
 }
 
@@ -87,7 +71,8 @@ bool bayer_format(MvGvspPixelType type) {
 
 bool supported_input(MvGvspPixelType type) {
   return plain_mono(type) || bayer_format(type) ||
-         type == PixelType_Gvsp_RGB8_Packed || type == PixelType_Gvsp_BGR8_Packed;
+         type == PixelType_Gvsp_RGB8_Packed || type == PixelType_Gvsp_BGR8_Packed ||
+         type == PixelType_Gvsp_YUV422_Packed || type == PixelType_Gvsp_YUV422_YUYV_Packed;
 }
 
 const char* feature_name(Feature feature) {
@@ -108,13 +93,14 @@ public:
 
   ~MvsCamera() override {
     disconnect();
-    MV_CC_Finalize();
+    // MVS may still have background threads at process exit. Finalize can unload
+    // their code before they stop, causing an intermittent shutdown segfault.
   }
 
   bool connect(const Selector& selector, std::string& error) override {
     disconnect();
     MV_CC_DEVICE_INFO_LIST list{};
-    const int enumeration = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &list);
+    const int enumeration = MV_CC_EnumDevices(MV_USB_DEVICE, &list);
     if (enumeration != MV_OK) {
       error = sdk_error("MV_CC_EnumDevices", enumeration);
       return false;
@@ -123,17 +109,15 @@ public:
     std::vector<MV_CC_DEVICE_INFO*> raw_devices;
     for (unsigned int i = 0; i < list.nDeviceNum; ++i) {
       auto* raw = list.pDeviceInfo[i];
-      if (raw && (raw->nTLayerType == MV_GIGE_DEVICE || raw->nTLayerType == MV_USB_DEVICE)) {
+      if (raw && raw->nTLayerType == MV_USB_DEVICE &&
+          describe(*raw).model == "MV-CA016-10UC") {
         devices.push_back(describe(*raw));
         raw_devices.push_back(raw);
       }
     }
     Selector effective = selector;
-    if (effective.serial_number.empty() && effective.camera_ip.empty() && !pinned_serial_.empty()) {
+    if (effective.serial_number.empty() && !pinned_serial_.empty()) {
       effective.serial_number = pinned_serial_;
-    } else if (effective.serial_number.empty() && effective.camera_ip.empty() &&
-               !pinned_ip_.empty()) {
-      effective.camera_ip = pinned_ip_;
     }
     std::size_t index = 0;
     if (!select_device(devices, effective, index, error)) return false;
@@ -152,20 +136,6 @@ public:
     opened_ = true;
     device_ = devices[index];
     if (!device_.serial_number.empty()) pinned_serial_ = device_.serial_number;
-    else if (device_.gige) pinned_ip_ = device_.camera_ip;
-    const int callback = MV_CC_RegisterExceptionCallBack(handle_, &MvsCamera::on_exception, this);
-    if (callback != MV_OK) {
-      error = sdk_error("MV_CC_RegisterExceptionCallBack", callback);
-      disconnect();
-      return false;
-    }
-    if (device_.gige) {
-      const int packet_size = MV_CC_GetOptimalPacketSize(handle_);
-      if (packet_size > 0) {
-        // Packet tuning is optional; the camera's existing setting remains usable if this fails.
-        MV_CC_SetIntValueEx(handle_, "GevSCPSPacketSize", packet_size);
-      }
-    }
     const int trigger = MV_CC_SetEnumValue(handle_, "TriggerMode", MV_TRIGGER_MODE_OFF);
     if (trigger != MV_OK) {
       error = sdk_error("set TriggerMode=Off", trigger);
@@ -179,12 +149,10 @@ public:
       return false;
     }
     grabbing_ = true;
-    disconnected_.store(false);
     return true;
   }
 
   void disconnect() override {
-    disconnected_.store(false);
     if (handle_) {
       if (grabbing_) MV_CC_StopGrabbing(handle_);
       if (opened_) MV_CC_CloseDevice(handle_);
@@ -195,11 +163,10 @@ public:
     grabbing_ = false;
   }
 
-  bool connected() const override { return handle_ && opened_ && !disconnected_.load(); }
+  bool connected() const override { return handle_ && opened_; }
 
   std::string device_label() const override {
-    return device_.model + " [" + device_.serial_number +
-           (device_.camera_ip.empty() ? "" : ", " + device_.camera_ip) + "]";
+    return device_.model + " [" + device_.serial_number + "]";
   }
 
   GrabResult grab(Frame& frame, std::string& error) override {
@@ -377,12 +344,6 @@ public:
   }
 
 private:
-  static void __stdcall on_exception(unsigned int message_type, void* user) {
-    if (message_type == MV_EXCEPTION_DEV_DISCONNECT && user) {
-      static_cast<MvsCamera*>(user)->disconnected_.store(true);
-    }
-  }
-
   void restart_after_format(std::string& error) {
     const int result = MV_CC_StartGrabbing(handle_);
     if (result == MV_OK) grabbing_ = true;
@@ -392,31 +353,24 @@ private:
   void* handle_ = nullptr;
   bool opened_ = false;
   bool grabbing_ = false;
-  std::atomic<bool> disconnected_{false};
   Device device_;
   std::string pinned_serial_;
-  std::string pinned_ip_;
 };
 
 }  // namespace
 
 bool select_device(const std::vector<Device>& devices, const Selector& selector,
                    std::size_t& index, std::string& error) {
-  if (!selector.serial_number.empty() && !selector.camera_ip.empty()) {
-    error = "set either serial_number or camera_ip, not both";
-    return false;
-  }
   std::vector<std::size_t> matches;
   for (std::size_t i = 0; i < devices.size(); ++i) {
-    if ((!selector.serial_number.empty() && devices[i].serial_number == selector.serial_number) ||
-        (!selector.camera_ip.empty() && devices[i].gige && devices[i].camera_ip == selector.camera_ip) ||
-        (selector.serial_number.empty() && selector.camera_ip.empty())) {
+    if (devices[i].model == "MV-CA016-10UC" &&
+        (selector.serial_number.empty() || devices[i].serial_number == selector.serial_number)) {
       matches.push_back(i);
     }
   }
   if (matches.size() != 1) {
     error = matches.empty() ? "no matching camera found" :
-            "multiple cameras match; set serial_number or camera_ip";
+            "multiple cameras match; set serial_number";
     return false;
   }
   index = matches.front();

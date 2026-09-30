@@ -9,14 +9,11 @@ namespace hikrobot_mvs_camera {
 
 struct Selector {
   std::string serial_number;
-  std::string camera_ip;
 };
 
 struct Device {
   std::string serial_number;
-  std::string camera_ip;
   std::string model;
-  bool gige = false;
 };
 
 // Return the unique matching device. An empty selector is only safe with one camera.

@@ -2,8 +2,8 @@
 <package format="3">
   <name>hikrobot_mvs_camera</name>
   <version>0.1.0</version>
-  <description>ROS 2 wrapper for Hikrobot cameras using the MVS C SDK.</description>
-  <maintainer email="maintainer@example.com">Hikrobot MVS Camera maintainers</maintainer>
+  <description>ROS 2 driver for the Hikrobot MV-CA016-10UC USB3 camera using MVS.</description>
+  <maintainer email="x1eYy@users.noreply.github.com">x1eYy</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
