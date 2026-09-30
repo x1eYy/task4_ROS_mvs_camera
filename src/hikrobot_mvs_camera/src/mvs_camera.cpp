@@ -343,6 +343,29 @@ public:
     return true;
   }
 
+  bool read_settings(double& exposure, double& gain, double& frame_rate,
+                     std::string& pixel_format, std::string& error) override {
+    if (!connected()) { error = "camera is not connected"; return false; }
+    MVCC_FLOATVALUE value{};
+    const Feature features[] = {Feature::Exposure, Feature::Gain, Feature::FrameRate};
+    double* outputs[] = {&exposure, &gain, &frame_rate};
+    for (std::size_t i = 0; i < 3; ++i) {
+      const char* name = feature_name(features[i]);
+      const int result = MV_CC_GetFloatValue(handle_, name, &value);
+      if (result != MV_OK) { error = sdk_error(name, result); return false; }
+      *outputs[i] = value.fCurValue;
+    }
+    MVCC_ENUMVALUE_EX format{};
+    int result = MV_CC_GetEnumValueEx(handle_, "PixelFormat", &format);
+    if (result != MV_OK) { error = sdk_error("get PixelFormat", result); return false; }
+    MVCC_ENUMENTRY entry{};
+    entry.nValue = format.nCurValue;
+    result = MV_CC_GetEnumEntrySymbolic(handle_, "PixelFormat", &entry);
+    if (result != MV_OK) { error = sdk_error("read back PixelFormat", result); return false; }
+    pixel_format = entry.chSymbolic;
+    return true;
+  }
+
 private:
   void restart_after_format(std::string& error) {
     const int result = MV_CC_StartGrabbing(handle_);

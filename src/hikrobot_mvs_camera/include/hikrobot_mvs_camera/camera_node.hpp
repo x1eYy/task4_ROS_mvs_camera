@@ -38,6 +38,7 @@ private:
   std::string frame_id_;
   std::mutex camera_mutex_;
   std::atomic<bool> stopping_{false};
+  std::atomic<bool> refresh_readback_{false};
   std::thread worker_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr fps_publisher_;

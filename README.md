@@ -46,6 +46,8 @@ rviz2 -d install/hikrobot_mvs_camera/share/hikrobot_mvs_camera/config/camera.rvi
 | `pixel_format` | 空 | MVS 像素格式符号；空表示启动时保留相机当前值 |
 | `mvs_lib_dir` | `/opt/MVS/lib/64` | 仅供 launch 设置 SDK 运行时库路径 |
 
+节点连接后还会更新四个只读的设备读回参数：`current_exposure_time_us`、`current_gain_db`、`current_frame_rate_hz`、`current_pixel_format`。启动时它们为 `-1` 或空字符串，连接成功后显示相机真实值；动态设置成功后也会刷新。它们可能因设备浮点步进与请求值略有差异。`actual_fps` 仍是发布吞吐率，与 `current_frame_rate_hz` 所表示的设备配置值不同。
+
 动态设置示例，每次设置一项：
 
 ```bash
@@ -54,6 +56,8 @@ ros2 param set /hikrobot_mvs_camera gain_db 2.0
 ros2 param set /hikrobot_mvs_camera frame_rate_hz 30.0
 ros2 param set /hikrobot_mvs_camera pixel_format BayerRG8
 ros2 param get /hikrobot_mvs_camera pixel_format
+ros2 param get /hikrobot_mvs_camera current_exposure_time_us
+ros2 param get /hikrobot_mvs_camera current_pixel_format
 ```
 
 节点先查询设备支持范围与格式，检查 SDK 返回值并读回确认；不支持或越界的值会被拒绝并给出原因。手动曝光/增益会关闭对应自动模式，设置帧率会启用帧率控制。像素格式切换会暂停并恢复采集。断线期间不接受新的动态参数；重新连接后恢复此前成功设置的参数。设置帧率与实际采集帧率是两个不同指标，例如曝光 50 ms 时，即使请求 30 Hz，实际帧率也可能约为 20 fps。

@@ -43,6 +43,8 @@ public:
   virtual GrabResult grab(Frame& frame, std::string& error) = 0;
   virtual bool set_float(Feature feature, double value, std::string& error) = 0;
   virtual bool set_pixel_format(const std::string& value, std::string& error) = 0;
+  virtual bool read_settings(double& exposure, double& gain, double& frame_rate,
+                             std::string& pixel_format, std::string& error) = 0;
 };
 
 std::unique_ptr<CameraBackend> make_mvs_camera();

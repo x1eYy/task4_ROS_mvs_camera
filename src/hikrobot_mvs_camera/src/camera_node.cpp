@@ -6,6 +6,9 @@
 #include <utility>
 
 namespace hikrobot_mvs_camera {
+namespace {
+thread_local bool updating_readback = false;
+}
 
 CameraNode::CameraNode(std::unique_ptr<CameraBackend> backend, const rclcpp::NodeOptions& options)
 : rclcpp::Node("hikrobot_mvs_camera", options), backend_(std::move(backend)) {
@@ -17,6 +20,10 @@ CameraNode::CameraNode(std::unique_ptr<CameraBackend> backend, const rclcpp::Nod
   settings_.gain = declare_parameter<double>("gain_db", -1.0);
   settings_.frame_rate = declare_parameter<double>("frame_rate_hz", -1.0);
   settings_.pixel_format = declare_parameter<std::string>("pixel_format", "");
+  declare_parameter<double>("current_exposure_time_us", -1.0);
+  declare_parameter<double>("current_gain_db", -1.0);
+  declare_parameter<double>("current_frame_rate_hz", -1.0);
+  declare_parameter<std::string>("current_pixel_format", "");
   if (image_topic.empty() || frame_id_.empty()) {
     throw std::invalid_argument("image_topic and frame_id must not be empty");
   }
@@ -67,6 +74,15 @@ rcl_interfaces::msg::SetParametersResult CameraNode::on_parameters(
       response.reason = name + " is fixed after startup";
       return response;
     }
+    if (name == "current_exposure_time_us" || name == "current_gain_db" ||
+        name == "current_frame_rate_hz" || name == "current_pixel_format") {
+      if (!updating_readback) {
+        response.successful = false;
+        response.reason = name + " is a device readback and cannot be set";
+        return response;
+      }
+      continue;
+    }
     if (name == "exposure_time_us" || name == "gain_db" || name == "frame_rate_hz" ||
         name == "pixel_format") ++camera_updates;
   }
@@ -100,6 +116,7 @@ rcl_interfaces::msg::SetParametersResult CameraNode::on_parameters(
         response.successful = false; return response;
       }
       *slot = value;
+      refresh_readback_.store(true);
     } else if (name == "pixel_format") {
       if (param.get_type() != rclcpp::ParameterType::PARAMETER_STRING || param.as_string().empty()) {
         response.successful = false; response.reason = "pixel_format must be a non-empty string";
@@ -112,6 +129,7 @@ rcl_interfaces::msg::SetParametersResult CameraNode::on_parameters(
         response.successful = false; return response;
       }
       settings_.pixel_format = param.as_string();
+      refresh_readback_.store(true);
     }
   }
   return response;
@@ -135,6 +153,7 @@ void CameraNode::run() {
         if (backend_->connect(selector_, error)) {
           if (apply_settings(error)) {
             connected_now = true;
+            refresh_readback_.store(true);
           } else {
             backend_->disconnect();
           }
@@ -142,6 +161,33 @@ void CameraNode::run() {
       } else {
         result = backend_->grab(frame, error);
         if (result == GrabResult::Disconnected) backend_->disconnect();
+      }
+    }
+    if (refresh_readback_.exchange(false)) {
+      double exposure = 0.0, gain = 0.0, frame_rate = 0.0;
+      std::string pixel_format, read_error;
+      bool read = false;
+      {
+        std::lock_guard<std::mutex> lock(camera_mutex_);
+        if (backend_->connected()) {
+          read = backend_->read_settings(exposure, gain, frame_rate, pixel_format, read_error);
+        }
+      }
+      if (read) {
+        updating_readback = true;
+        const auto updated = set_parameters_atomically({
+          rclcpp::Parameter("current_exposure_time_us", exposure),
+          rclcpp::Parameter("current_gain_db", gain),
+          rclcpp::Parameter("current_frame_rate_hz", frame_rate),
+          rclcpp::Parameter("current_pixel_format", pixel_format),
+        });
+        updating_readback = false;
+        if (!updated.successful) {
+          RCLCPP_WARN(get_logger(), "could not expose camera readback: %s", updated.reason.c_str());
+        }
+      } else if (!read_error.empty()) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                             "camera readback unavailable: %s", read_error.c_str());
       }
     }
     if (connected_now) {

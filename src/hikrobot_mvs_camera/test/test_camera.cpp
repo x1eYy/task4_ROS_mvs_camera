@@ -66,6 +66,14 @@ public:
     ++state_->format_writes;
     return true;
   }
+  bool read_settings(double& exposure, double& gain, double& frame_rate,
+                     std::string& pixel_format, std::string&) override {
+    exposure = state_->exposure.load();
+    gain = 0.0;
+    frame_rate = 70.4;
+    pixel_format = "Mono8";
+    return true;
+  }
 private:
   std::shared_ptr<FakeState> state_;
   bool connected_ = false;
@@ -120,6 +128,12 @@ TEST_F(RosTest, PublishesFrameAndRestoresAcceptedSettingAfterReconnect) {
   executor.add_node(listener);
   ASSERT_TRUE(wait_for([&] { executor.spin_some(); return received > 0; }));
   EXPECT_EQ(state->exposure.load(), 200.0);
+  ASSERT_TRUE(wait_for([&] {
+    return camera->get_parameter("current_exposure_time_us").as_double() == 200.0 &&
+           camera->get_parameter("current_pixel_format").as_string() == "Mono8";
+  }));
+  auto readback_write = camera->set_parameter(rclcpp::Parameter("current_gain_db", 5.0));
+  EXPECT_FALSE(readback_write.successful);
   auto result = camera->set_parameter(rclcpp::Parameter("exposure_time_us", 300.0));
   ASSERT_TRUE(result.successful) << result.reason;
   EXPECT_EQ(state->exposure.load(), 300.0);
